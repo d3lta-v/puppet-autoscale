@@ -31,15 +31,18 @@ fi
 $stop_docker
 
 # get ephemeral storage devices
-EPH_BLK_DEVS=( `curl -s http://169.254.169.254/latest/meta-data/block-device-mapping/ | grep ^ephemeral | sort` )
-EPH_BLK_DEVS_CNT=${#EPH_BLK_DEVS[@]}
+#EPH_BLK_DEVS=( `curl -s http://169.254.169.254/latest/meta-data/block-device-mapping/ | grep ^ephemeral | sort` )
+#EPH_BLK_DEVS_CNT=${#EPH_BLK_DEVS[@]}
+EPH_BLK_DEVS_CNT=1
 echo "Number of ephemeral storage devices: $EPH_BLK_DEVS_CNT"
 
 # get EBS block devices
-EBS_BLK_DEVS=( `curl -s http://169.254.169.254/latest/meta-data/block-device-mapping/ | grep ^ebs | sort` )
-EBS_BLK_DEVS_CNT=${#EBS_BLK_DEVS[@]}
+#EBS_BLK_DEVS=( `curl -s http://169.254.169.254/latest/meta-data/block-device-mapping/ | grep ^ebs | sort` )
+#EBS_BLK_DEVS_CNT=${#EBS_BLK_DEVS[@]}
+EBS_BLK_DEVS_CNT=2
 echo "Number of EBS block devices: $EBS_BLK_DEVS_CNT"
 
+: '
 # set devices
 if [ "$EPH_BLK_DEVS_CNT" -ge 2 ]; then
   DEV1=/dev/$(curl -s http://169.254.169.254/latest/meta-data/block-device-mapping/${EPH_BLK_DEVS[0]})
@@ -63,6 +66,17 @@ else
     DEV2=/dev/xvdc
   fi
 fi
+'
+# set devices manually by using magic numbers
+# TODO FIXME: CHANGE THESE MAGIC NUMBERS
+#DEV1=/dev/sdc
+#DEV2=/dev/sdd
+for sd_disk in `fdisk -l | grep 'Disk /dev/sd' | cut -d' ' -f 2,3 | tr -d ' '`; do
+  dev_disk=`echo $sd_disk | cut -d':' -f 1`
+  dev_size=`echo $sd_disk | cut -d':' -f 2`
+  if [[ $dev_size = 53.7 ]]; then DEV1=$dev_disk;
+  elif [ $dev_size = 107.4 ]; then DEV2=$dev_disk; fi
+done
 
 # resolve symlinks
 DEV1=$(readlink -f $DEV1)
@@ -144,20 +158,13 @@ DEV2_SIZE=$(blockdev --getsize64 $DEV2)
 echo "DEV1: $DEV1 $DEV1_SIZE"
 echo "DEV2: $DEV2 $DEV2_SIZE"
 
-# delegate devices for HySDS work dir and docker storage volumes; 
-# if only one ephemeral disk, use for docker; # otherwise larger 
-# one is for HySDS work dir
-if [[ "$EPH_BLK_DEVS_CNT" -eq 1 || "$NVME_EPH_BLK_DEVS_CNT" -eq 1 ]]; then
-  DOCKER_DEV=$DEV1
-  DATA_DEV=$DEV2
+# delegate devices for HySDS work dir and docker storage volumes; larger one is for HySDS work dir
+if [ "$DEV1_SIZE" -gt "$DEV2_SIZE" ]; then
+  DATA_DEV=$DEV1
+  DOCKER_DEV=$DEV2
 else
-  if [ "$DEV1_SIZE" -gt "$DEV2_SIZE" ]; then
-    DATA_DEV=$DEV1
-    DOCKER_DEV=$DEV2
-  else
-    DATA_DEV=$DEV2
-    DOCKER_DEV=$DEV1
-  fi
+  DATA_DEV=$DEV2
+  DOCKER_DEV=$DEV1
 fi
 
 # log devices
