@@ -78,7 +78,7 @@ fi
 
 TEMP_DISK='/dev/sdb'
 TEMP_DISK_INFO=$(fdisk -l | grep 'Disk /dev/sdb' | cut -d' ' -f 2,3 | tr -d ' ')
-TEMP_DISK_SIZE=$(echo $TEMP_DISK_INFO | cut -d':' -f 2)
+TEMP_DISK_SIZE=$(blockdev --getsize64 /dev/sdb) # gets disk size in bytes
 
 # Unmount the temporary disk first
 umount /dev/sdb1
@@ -86,7 +86,7 @@ umount /dev/sdb1
 # Write a new partition table to temporary disk, effectively nuking it
 parted --script /dev/sdb mktable gpt
 
-if [[ $TEMP_DISK_SIZE -gt 150 ]]; then
+if [[ "$TEMP_DISK_SIZE" -gt "161061273600" ]]; then
   echo "Partitioning disk, dedicating 50GB to Docker"
   parted --script -a optimal /dev/sdb mkpart docker '0%' 51200MiB \
                                       mkpart data xfs 51200MiB '100%'
@@ -112,7 +112,7 @@ DEV1=$(readlink -f $DEV1)
 DEV2=$(readlink -f $DEV2)
 
 # AZURE: Block commented out as $DEV2 may be nonexistent, causing the resolve NVMe routine to run
-:'
+: '
 # resolve NVMe devices
 if [[ ! -e "$DEV1" && ! -e "$DEV2" ]]; then
   yum install -y nvme-cli || true
