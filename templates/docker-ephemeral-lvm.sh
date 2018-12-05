@@ -1,4 +1,4 @@
-#!/bin/sh -e
+#!/bin/bash -e
 # This script will DESTROY the first ephemeral/EBS volume and remount it for HySDS work dir.
 # This script will DESTROY the second ephemeral/EBS volume and remount it for Docker volume storage.
 
@@ -42,6 +42,8 @@ echo "Number of ephemeral storage devices: $EPH_BLK_DEVS_CNT"
 EBS_BLK_DEVS_CNT=2
 echo "Number of EBS block devices: $EBS_BLK_DEVS_CNT"
 
+
+# AZURE: Block commented out, because this code is AWS specific
 : '
 # set devices
 if [ "$EPH_BLK_DEVS_CNT" -ge 2 ]; then
@@ -67,21 +69,50 @@ else
   fi
 fi
 '
-# set devices manually by using magic numbers
-# TODO FIXME: CHANGE THESE MAGIC NUMBERS
-#DEV1=/dev/sdc
-#DEV2=/dev/sdd
-for sd_disk in `fdisk -l | grep 'Disk /dev/sd' | cut -d' ' -f 2,3 | tr -d ' '`; do
-  dev_disk=`echo $sd_disk | cut -d':' -f 1`
-  dev_size=`echo $sd_disk | cut -d':' -f 2`
-  if [[ $dev_size = 53.7 ]]; then DEV1=$dev_disk;
-  elif [ $dev_size = 107.4 ]; then DEV2=$dev_disk; fi
-done
+
+############ START AZURE ADAPTATION
+
+# Check if /dev/sdb (which is ALWAYS the temporary/ephemeral storage in Azure)
+# exceeeds 150GB. If it is, partition 50GB to Docker and rest to /data,
+# else, dedicate the storage to Docker
+
+TEMP_DISK='/dev/sdb'
+TEMP_DISK_INFO=$(fdisk -l | grep 'Disk /dev/sdb' | cut -d' ' -f 2,3 | tr -d ' ')
+TEMP_DISK_SIZE=$(echo $TEMP_DISK_INFO | cut -d':' -f 2)
+
+# Unmount the temporary disk first
+umount /dev/sdb1
+
+# Write a new partition table to temporary disk, effectively nuking it
+parted --script /dev/sdb mktable gpt
+
+if [[ $TEMP_DISK_SIZE -gt 150 ]]; then
+  echo "Partitioning disk, dedicating 50GB to Docker"
+  parted --script -a optimal /dev/sdb mkpart docker '0%' 51200MiB \
+                                      mkpart data xfs 51200MiB '100%'
+  DEV1=/dev/sdb1
+  DEV2=/dev/sdb2
+else
+  echo "Not partitioning disk, dedicating /dev/sdb to Docker"
+  DEV1=/dev/sdb
+  # Check if there is an additional data disk
+  if [ -e /dev/sdc ]; then
+    DEV2=/dev/sdc
+  elif [ -e /dev/sdd ]; then
+    DEV2=/dev/sdd
+  else
+    unset DEV2
+  fi
+fi
+
+############ END AZURE ADAPTATION
 
 # resolve symlinks
 DEV1=$(readlink -f $DEV1)
 DEV2=$(readlink -f $DEV2)
 
+# AZURE: Block commented out as $DEV2 may be nonexistent, causing the resolve NVMe routine to run
+:'
 # resolve NVMe devices
 if [[ ! -e "$DEV1" && ! -e "$DEV2" ]]; then
   yum install -y nvme-cli || true
@@ -113,7 +144,7 @@ if [[ ! -e "$DEV1" && ! -e "$DEV2" ]]; then
     fi
     NVME_EBS_BLK_DEVS_CNT=${#NVME_EBS_BLK_DEVS[@]}
     echo "Number of NVMe EBS block devices: $NVME_EBS_BLK_DEVS_CNT"
-  
+
     # assign devices
     if [ "$NVME_EPH_BLK_DEVS_CNT" -ge 2 ]; then
       DEV1=${NVME_EPH_BLK_DEVS[0]}
@@ -150,6 +181,8 @@ if [[ ! -e "$DEV1" && ! -e "$DEV2" ]]; then
     DEV2=/dev/xvdc
   fi
 fi
+'
+
 # get sizes
 DEV1_SIZE=$(blockdev --getsize64 $DEV1)
 DEV2_SIZE=$(blockdev --getsize64 $DEV2)
@@ -190,7 +223,7 @@ if [[ -e "$DATA_DEV" ]]; then
 
   # mount as ${DATA_DIR}
   mkdir -p $DATA_DIR || true
-  mount $DATA_DEV $DATA_DIR
+  mount -o inode64 $DATA_DEV $DATA_DIR
 
   # create work and unpack index style
   mkdir -p ${DATA_DIR}/work || true
@@ -259,7 +292,7 @@ if [[ -e "$DOCKER_DEV" ]]; then
     "dm.use_deferred_removal=true",
     "dm.use_deferred_deletion=true",
     "dm.fs=xfs",
-    "dm.basesize=100G"
+    "dm.basesize=50G"
   ]
 }
 EOF
